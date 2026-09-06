@@ -1,0 +1,15 @@
+{
+  "name": "Gestor de Inventario",
+  "short_name": "Inventario",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f5f7fa",
+  "theme_color": "#34495e",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/5097/5097399.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
