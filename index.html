@@ -1,22 +1,28 @@
-DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestor de Inventario</title>
+    <title>Gestor de Inventario Pro</title>
     <meta name="theme-color" content="#34495e">
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
+    
+    <!-- Librerías para generar PDF de reportes y orden de compra -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+
     <style>
         :root { --primary:#34495e; --green:#27ae60; --red:#e74c3c; --orange:#f39c12; --blue:#2980b9; --bg:#f5f7fa; --surface:white; --text:#2c3e50; --border:#e5e7e9; }
         body.oscuro { --bg:#1e272e; --surface:#2f3640; --text:#f5f6fa; --border:#4b5563; --primary:#192a56; }
         * { box-sizing:border-box; }
         body { font-family:'Segoe UI',Tahoma,sans-serif; max-width:1200px; margin:25px auto; padding:0 18px; background:var(--bg); color:var(--text); transition:.2s; }
         h1 { text-align:center; margin-bottom:25px; }
-        .resumen { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; }
+        .controles-superiores { display:flex; justify-content:flex-end; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+        .resumen { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:22px; }
         .tarjeta { background:var(--surface); padding:18px; border-radius:10px; box-shadow:0 3px 10px #0000000d; text-align:center; }
-        .tema { float:right; margin-bottom:10px; }
-        .tarjeta strong { display:block; font-size:1.65rem; color:var(--blue); margin-top:5px; }
+        .tarjeta strong { display:block; font-size:1.5rem; color:var(--blue); margin-top:5px; }
+        .tarjeta.ganancia strong { color:var(--green); }
         .panel, .form-inventario, .grafico { background:var(--surface); padding:18px; border-radius:10px; box-shadow:0 3px 10px #0000000d; margin-bottom:20px; }
         body.oscuro input, body.oscuro select { background:#353b48; color:var(--text); border-color:#596275; }
         .form-inventario { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
@@ -29,6 +35,7 @@ DOCTYPE html>
         .btn-eliminar { background:var(--red); color:white; }
         .btn-mov { background:#8e44ad; color:white; }
         .btn-vender { background:#d35400; color:white; }
+        .btn-pdf { background:#8e44ad; color:white; }
         .filtros { display:grid; grid-template-columns:2fr 1fr 1fr 1fr 1fr; gap:10px; }
         .tabla-contenedor { overflow-x:auto; }
         table { width:100%; border-collapse:collapse; background:var(--surface); min-width:1250px; }
@@ -55,31 +62,60 @@ DOCTYPE html>
         #notificacion.error { background:var(--red); }
         .modal { position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; padding:20px; background:#0008; }
         .modal.oculto { display:none; }
-        .modal-contenido { width:min(100%, 400px); background:var(--surface); color:var(--text); padding:22px; border-radius:10px; box-shadow:0 8px 30px #0005; }
+        .modal-contenido { width:min(100%, 450px); background:var(--surface); color:var(--text); padding:22px; border-radius:10px; box-shadow:0 8px 30px #0005; }
         .modal-contenido h2 { margin:0 0 8px; }
         .modal-contenido label { display:block; margin:16px 0 6px; font-weight:600; }
         .modal-acciones { display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
-        @media (max-width:760px) { .graficos { grid-template-columns:1fr; } }
-        @media (max-width:760px) { .resumen { grid-template-columns:repeat(2,1fr); } .form-inventario,.filtros { grid-template-columns:1fr; } .btn-principal { grid-column:auto; } }
+        @media (max-width:900px) { .resumen { grid-template-columns:repeat(2,1fr); } }
+        @media (max-width:760px) { .graficos { grid-template-columns:1fr; } .form-inventario,.filtros { grid-template-columns:1fr; } .btn-principal { grid-column:auto; } }
     </style>
 </head>
 <body>
-    <button class="btn-secundario tema" id="alternar-tema" type="button">🌙 Modo oscuro</button>
-    <h1>Gestor de Inventario</h1>
+    <div class="controles-superiores">
+        <select id="selector-moneda" class="btn-secundario">
+            <option value="$">$ (Dólares / General)</option>
+            <option value="COP">COP ($ Pesos Col.)</option>
+            <option value="MXN">MXN ($ Pesos Mex.)</option>
+            <option value="EUR">€ (Euros)</option>
+            <option value="PEN">S/ (Soles)</option>
+            <option value="CLP">CLP ($ Pesos Chi.)</option>
+        </select>
+        <!-- Función 3: Generador de Orden de Compra -->
+        <button class="btn-secundario" id="btn-compras-pdf" type="button" title="Generar lista de reabastecimiento en PDF">🛒 Orden de compra</button>
+        <button class="btn-pdf" id="btn-reporte-pdf" type="button" title="Generar reporte PDF de inventario">📄 Reporte PDF</button>
+        <button class="btn-secundario" id="btn-exportar" type="button" title="Descargar copia de seguridad">📥 Exportar copia</button>
+        <button class="btn-secundario" id="btn-importar" type="button" title="Restaurar copia de seguridad">📤 Importar datos</button>
+        <input type="file" id="archivo-importar" accept=".json" class="oculto">
+        <button class="btn-secundario tema" id="alternar-tema" type="button">🌙 Modo oscuro</button>
+    </div>
+
+    <h1>Gestor de Inventario Pro</h1>
 
     <section class="resumen">
         <div class="tarjeta">Productos<strong id="total-productos">0</strong></div>
         <div class="tarjeta">Unidades<strong id="total-unidades">0</strong></div>
-        <div class="tarjeta">Valor del inventario<strong id="valor-inventario">$0.00</strong></div>
-        <div class="tarjeta">Alertas de stock<strong id="total-alertas">0</strong></div>
+        <div class="tarjeta">Valor Inventario<strong id="valor-inventario">$0.00</strong></div>
+        <div class="tarjeta ganancia">Ganancia estimada<strong id="total-ganancia-estimada">$0.00</strong></div>
+        <div class="tarjeta">Alertas stock<strong id="total-alertas">0</strong></div>
     </section>
 
+    <!-- Función 1: Sección de Balance Financiero y Ganancias Reales -->
+    <section class="panel">
+        <h2>💰 Balance Financiero y Ganancias Realizadas</h2>
+        <p class="nota">Basado en el historial de ventas registradas.</p>
+        <div style="display:flex; gap:15px; margin-top:10px; flex-wrap:wrap;">
+            <div class="tarjeta" style="flex:1;">Total Ingresos por Ventas: <strong id="balance-total-ventas">$0.00</strong></div>
+            <div class="tarjeta ganancia" style="flex:1;">Ganancia Neta Realizada: <strong id="balance-total-ganancia">$0.00</strong></div>
+        </div>
+    </section>
+
+    <!-- Formulario con Precio de Compra incorporado -->
     <form id="formulario-producto" class="form-inventario">
         <input type="hidden" id="indice-edicion" value="-1">
         <input type="text" id="nombre" placeholder="Nombre del producto" required>
         <input type="number" id="cantidad" placeholder="Cantidad" min="0" required>
-        <input type="number" id="precio" placeholder="Precio de venta ($)" min="0" step="0.01" required>
-        <input type="number" id="precio-compra" placeholder="Precio de compra ($)" min="0" step="0.01" value="0" required>
+        <input type="number" id="precio" placeholder="Precio de venta" min="0" step="0.01" required>
+        <input type="number" id="precio-compra" placeholder="Precio de compra (Costo)" min="0" step="0.01" value="0" required>
         <input type="number" id="stock-minimo" placeholder="Stock mínimo" min="0" value="0" required>
         <select id="categoria" required>
             <option value="" disabled selected>Categoría</option><option>Alimentos</option><option>Bebidas</option><option>Limpieza</option><option>Otros</option>
@@ -106,7 +142,7 @@ DOCTYPE html>
     <div class="tabla-contenedor">
         <table>
             <thead><tr>
-                <th data-orden="nombre">Producto ↕</th><th data-orden="cantidad">Cantidad ↕</th><th data-orden="precio">Venta ↕</th><th>Compra</th><th>Total</th><th>Ganancia</th><th>Categoría</th><th>Estado</th><th>Proveedor</th><th>Vencimiento</th><th>Acciones</th>
+                <th data-orden="nombre">Producto ↕</th><th data-orden="cantidad">Cantidad ↕</th><th data-orden="precio">Venta ↕</th><th>Compra</th><th>Total Venta</th><th>Ganancia Est.</th><th>Categoría</th><th>Estado</th><th>Proveedor</th><th>Vencimiento</th><th>Acciones</th>
             </tr></thead>
             <tbody id="lista-productos"></tbody>
         </table>
@@ -119,7 +155,7 @@ DOCTYPE html>
 
     <section class="panel movimientos">
         <h2>Historial de ventas</h2>
-        <p class="nota">Ventas registradas individualmente o mediante salidas.</p>
+        <p class="nota">Registro de ventas procesadas en el sistema.</p>
         <ul id="lista-ventas"><li class="nota">Todavía no hay ventas.</li></ul>
     </section>
 
@@ -149,6 +185,11 @@ DOCTYPE html>
         const listaProductos = document.getElementById('lista-productos');
         const movimientosEl = document.getElementById('lista-movimientos');
         const ventasEl = document.getElementById('lista-ventas');
+        const selectorMoneda = document.getElementById('selector-moneda');
+
+        let monedaActual = localStorage.getItem('moneda') || '$';
+        if (selectorMoneda) selectorMoneda.value = monedaActual;
+
         let inventario = JSON.parse(localStorage.getItem('inventario') || '[]').map(p => ({
             ...p, cantidad:Number(p.cantidad)||0, precio:Number(p.precio)||0, precioCompra:Number(p.precioCompra)||0, stockMinimo:Number(p.stockMinimo)||0,
             proveedor:p.proveedor||'', vencimiento:p.vencimiento||'', movimientos:Array.isArray(p.movimientos)?p.movimientos:[]
@@ -156,12 +197,21 @@ DOCTYPE html>
         let ventas = JSON.parse(localStorage.getItem('ventas') || '[]');
         let orden = { campo:'nombre', asc:true };
         const $ = id => document.getElementById(id);
-        const guardar = () => { localStorage.setItem('inventario', JSON.stringify(inventario)); localStorage.setItem('ventas', JSON.stringify(ventas)); };
+
+        const formatearMoneda = (monto) => `${monedaActual} ${Number(monto).toFixed(2)}`;
+
+        const guardar = () => { 
+            localStorage.setItem('inventario', JSON.stringify(inventario)); 
+            localStorage.setItem('ventas', JSON.stringify(ventas)); 
+            localStorage.setItem('moneda', monedaActual);
+        };
+
         const diasHasta = fecha => fecha ? Math.ceil((new Date(fecha + 'T23:59:59') - new Date()) / 86400000) : Infinity;
         const alertaVencimiento = fecha => fecha && diasHasta(fecha) <= 30;
         const seguro = valor => String(valor ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
         const fechaTexto = fecha => fecha ? new Date(fecha + 'T00:00:00').toLocaleDateString('es-ES') : '—';
         const estaVencido = fecha => fecha && new Date(fecha + 'T23:59:59') < new Date();
+        
         let temporizadorNotificacion;
         function notificar(mensaje, error=false) {
             const elemento = $('notificacion');
@@ -170,6 +220,7 @@ DOCTYPE html>
             clearTimeout(temporizadorNotificacion);
             temporizadorNotificacion = setTimeout(() => elemento.className = '', 2800);
         }
+
         function dibujarGrafico(id, datos, colores) {
             const canvas = $(id), contexto = canvas.getContext('2d');
             const ancho = canvas.clientWidth || 400, alto = 250, escala = window.devicePixelRatio || 1;
@@ -187,6 +238,7 @@ DOCTYPE html>
             });
             contexto.strokeStyle = '#ccd3da'; contexto.beginPath(); contexto.moveTo(28, base); contexto.lineTo(ancho - 10, base); contexto.stroke();
         }
+
         function actualizarGraficos() {
             const categorias = {}, estados = {};
             inventario.forEach(p => { const categoria=p.categoria||'Sin categoría', estado=p.estado||'Sin estado'; categorias[categoria]=(categorias[categoria]||0)+1; estados[estado]=(estados[estado]||0)+1; });
@@ -197,12 +249,21 @@ DOCTYPE html>
         function registrarMovimiento(producto, tipo, cantidad) {
             producto.movimientos.push({ tipo, cantidad, fecha:new Date().toLocaleString('es-ES') });
         }
+
         function actualizarResumen() {
             $('total-productos').textContent = inventario.length;
             $('total-unidades').textContent = inventario.reduce((s,p)=>s+p.cantidad,0);
-            $('valor-inventario').textContent = '$' + inventario.reduce((s,p)=>s+p.cantidad*p.precio,0).toFixed(2);
+            $('valor-inventario').textContent = formatearMoneda(inventario.reduce((s,p)=>s+p.cantidad*p.precio,0));
+            $('total-ganancia-estimada').textContent = formatearMoneda(inventario.reduce((s,p)=>s+p.cantidad*(p.precio - p.precioCompra),0));
             $('total-alertas').textContent = inventario.filter(p=>p.cantidad<=p.stockMinimo || alertaVencimiento(p.vencimiento)).length;
+
+            // Función 1: Cálculo del Balance de Ventas y Ganancias Neta Real
+            const totalVentasVal = ventas.reduce((s,v) => s + (v.total || 0), 0);
+            const totalGananciaVal = ventas.reduce((s,v) => s + (v.ganancia || 0), 0);
+            $('balance-total-ventas').textContent = formatearMoneda(totalVentasVal);
+            $('balance-total-ganancia').textContent = formatearMoneda(totalGananciaVal);
         }
+
         function productosFiltrados() {
             const texto = $('buscador').value.toLowerCase(), cat=$('filtro-categoria').value, est=$('filtro-estado').value, stock=$('filtro-stock').value;
             return inventario.map((p,i)=>({p,i})).filter(({p}) => {
@@ -212,72 +273,176 @@ DOCTYPE html>
                 let x=a.p[orden.campo], y=b.p[orden.campo]; if(typeof x==='string') {x=x.toLowerCase();y=String(y).toLowerCase();} return (x>y?1:x<y?-1:0)*(orden.asc?1:-1);
             });
         }
+
         function actualizarTabla() {
             const filas = productosFiltrados();
             listaProductos.innerHTML = filas.length ? filas.map(({p,i}) => {
                 const alerta = p.cantidad <= p.stockMinimo, vencido=estaVencido(p.vencimiento), proximo=alertaVencimiento(p.vencimiento)&&!vencido;
                 const ganancia = p.precio - p.precioCompra;
-                return `<tr><td><strong>${seguro(p.nombre)}</strong></td><td class="${alerta?'alerta':''}">${p.cantidad}${alerta?' ⚠️':''}</td><td>$${p.precio.toFixed(2)}</td><td>$${p.precioCompra.toFixed(2)}</td><td>$${(p.cantidad*p.precio).toFixed(2)}</td><td>$${(p.cantidad*ganancia).toFixed(2)}</td><td>${seguro(p.categoria||'Sin categoría')}</td><td class="estado-${seguro((p.estado||'').toLowerCase())}">${seguro(p.estado||'Sin estado')}</td><td>${seguro(p.proveedor)||'—'}</td><td class="${vencido?'vencido':proximo?'alerta':''}">${fechaTexto(p.vencimiento)}${vencido?' (vencido)':proximo?' (próximo)':''}</td><td class="acciones"><button class="btn-editar" onclick="editarProducto(${i})">Editar</button><button class="btn-vender" onclick="registrarVenta(${i})">Registrar venta</button><button class="btn-mov" onclick="hacerMovimiento(${i})">Movimiento</button><button class="btn-eliminar" onclick="eliminarProducto(${i})">Eliminar</button></td></tr>`;
-            }).join('') : '<tr><td colspan="9" class="vacio">No hay productos que coincidan con los filtros.</td></tr>';
+                return `<tr><td><strong>${seguro(p.nombre)}</strong></td><td class="${alerta?'alerta':''}">${p.cantidad}${alerta?' ⚠️':''}</td><td>${formatearMoneda(p.precio)}</td><td>${formatearMoneda(p.precioCompra)}</td><td>${formatearMoneda(p.cantidad*p.precio)}</td><td>${formatearMoneda(p.cantidad*ganancia)}</td><td>${seguro(p.categoria||'Sin categoría')}</td><td class="estado-${seguro((p.estado||'').toLowerCase())}">${seguro(p.estado||'Sin estado')}</td><td>${seguro(p.proveedor)||'—'}</td><td class="${vencido?'vencido':proximo?'alerta':''}">${fechaTexto(p.vencimiento)}${vencido?' (vencido)':proximo?' (próximo)':''}</td><td class="acciones"><button class="btn-editar" onclick="editarProducto(${i})">Editar</button><button class="btn-vender" onclick="registrarVenta(${i})">Registrar venta</button><button class="btn-mov" onclick="hacerMovimiento(${i})">Movimiento</button><button class="btn-eliminar" onclick="eliminarProducto(${i})">Eliminar</button></td></tr>`;
+            }).join('') : '<tr><td colspan="11" class="vacio">No hay productos que coincidan con los filtros.</td></tr>';
             actualizarResumen();
             actualizarGraficos();
         }
+
         function actualizarMovimientos() {
             const datos=[]; inventario.forEach(p => p.movimientos.forEach(m => datos.push({...m,nombre:p.nombre})));
             datos.reverse(); movimientosEl.innerHTML=datos.length ? datos.slice(0,30).map(m=>`<li><strong>${seguro(m.tipo)}</strong> de ${m.cantidad} unidad(es) — ${seguro(m.nombre)} <span class="nota">(${m.fecha})</span></li>`).join('') : '<li class="nota">Todavía no hay movimientos.</li>';
-            ventasEl.innerHTML=ventas.length ? ventas.slice().reverse().slice(0,30).map(v=>`<li><strong>${seguro(v.nombre)}</strong>: ${v.cantidad} unidad(es) — $${v.total.toFixed(2)} <span class="nota">(${v.fecha})</span></li>`).join('') : '<li class="nota">Todavía no hay ventas.</li>';
+            ventasEl.innerHTML=ventas.length ? ventas.slice().reverse().slice(0,30).map(v=>`<li><strong>${seguro(v.nombre)}</strong>: ${v.cantidad} unidad(es) — ${formatearMoneda(v.total)} (Ganancia: ${formatearMoneda(v.ganancia||0)}) <span class="nota">(${v.fecha})</span></li>`).join('') : '<li class="nota">Todavía no hay ventas.</li>';
         }
+
+        selectorMoneda.addEventListener('change', e => {
+            monedaActual = e.target.value;
+            guardar();
+            actualizarTabla();
+            actualizarMovimientos();
+        });
+
+        // Función 3: Generación e Impresión de la Orden de Reabastecimiento (PDF)
+        $('btn-compras-pdf').onclick = () => {
+            if (!window.jspdf) return notificar('Cargando librería PDF...', true);
+            const faltantes = inventario.filter(p => p.cantidad <= p.stockMinimo);
+            if (!faltantes.length) return notificar('¡Todo perfecto! No tienes productos con stock bajo.');
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            doc.setFontSize(16);
+            doc.text("Orden de Compra / Reabastecimiento", 14, 20);
+            doc.setFontSize(10);
+            doc.text(`Fecha de solicitud: ${new Date().toLocaleDateString('es-ES')}`, 14, 28);
+
+            const filas = faltantes.map(p => [
+                p.nombre,
+                p.cantidad,
+                p.stockMinimo,
+                p.stockMinimo > p.cantidad ? (p.stockMinimo - p.cantidad) : 1,
+                p.proveedor
+            ]);
+
+            doc.autoTable({
+                startY: 35,
+                head: [['Producto', 'Stock Actual', 'Mínimo', 'Sugerido Pedir', 'Proveedor']],
+                body: filas,
+                theme: 'grid'
+            });
+
+            doc.save(`orden-compra-${new Date().toISOString().slice(0,10)}.pdf`);
+            notificar('Orden de compra descargada.');
+        };
+
+        // Reporte PDF Completo
+        $('btn-reporte-pdf').onclick = () => {
+            if (!window.jspdf) return notificar('Cargando librería PDF...', true);
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            doc.setFontSize(18);
+            doc.text("Reporte General de Inventario", 14, 20);
+            doc.setFontSize(10);
+            doc.text(`Fecha: ${new Date().toLocaleString('es-ES')}`, 14, 28);
+            doc.text(`Valor Total Venta: ${formatearMoneda(inventario.reduce((s,p)=>s+p.cantidad*p.precio,0))}`, 14, 34);
+
+            const filas = inventario.map(p => [
+                p.nombre, p.cantidad, formatearMoneda(p.precio), formatearMoneda(p.precioCompra),
+                formatearMoneda(p.cantidad * p.precio), p.categoria, p.estado
+            ]);
+
+            doc.autoTable({
+                startY: 40,
+                head: [['Producto', 'Cant.', 'Precio Venta', 'Precio Compra', 'Total', 'Categoría', 'Estado']],
+                body: filas, theme: 'striped'
+            });
+
+            doc.save(`reporte-inventario-${new Date().toISOString().slice(0,10)}.pdf`);
+            notificar('Reporte PDF generado.');
+        };
+
+        // Exportar e Importar
+        $('btn-exportar').onclick = () => {
+            const respaldo = { inventario, ventas, moneda: monedaActual, fecha: new Date().toISOString() };
+            const blob = new Blob([JSON.stringify(respaldo, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `inventario-respaldo-${new Date().toISOString().slice(0,10)}.json`;
+            a.click(); URL.revokeObjectURL(url);
+            notificar('Copia de seguridad descargada.');
+        };
+
+        $('btn-importar').onclick = () => $('archivo-importar').click();
+
+        $('archivo-importar').onchange = e => {
+            const archivo = e.target.files[0];
+            if (!archivo) return;
+            const lector = new FileReader();
+            lector.onload = evento => {
+                try {
+                    const datos = JSON.parse(evento.target.result);
+                    if (datos.inventario && Array.isArray(datos.inventario)) {
+                        if (confirm('¿Restaurar copia de seguridad? Sobrescribirá tus datos actuales.')) {
+                            inventario = datos.inventario;
+                            ventas = datos.ventas || [];
+                            if (datos.moneda) { monedaActual = datos.moneda; selectorMoneda.value = monedaActual; }
+                            guardar(); actualizarTabla(); actualizarMovimientos();
+                            notificar('Datos cargados exitosamente.');
+                        }
+                    } else notificar('Archivo no válido.', true);
+                } catch (err) { notificar('Error al leer archivo.', true); }
+            };
+            lector.readAsText(archivo); e.target.value = '';
+        };
+
         formulario.addEventListener('submit', e => { e.preventDefault(); const i=Number($('indice-edicion').value), datos={nombre:$('nombre').value.trim(),cantidad:Number($('cantidad').value),precio:Number($('precio').value),precioCompra:Number($('precio-compra').value),stockMinimo:Number($('stock-minimo').value),categoria:$('categoria').value,estado:$('estado').value,proveedor:$('proveedor').value.trim(),vencimiento:$('vencimiento').value};
             if(i<0) { datos.movimientos=[]; registrarMovimiento(datos,'Entrada inicial',datos.cantidad); inventario.push(datos); } else { const anterior=inventario[i].cantidad; inventario[i]={...inventario[i],...datos}; if(anterior!==datos.cantidad) registrarMovimiento(inventario[i],'Ajuste',datos.cantidad-anterior); cancelarEdicion(); }
             guardar(); actualizarTabla(); actualizarMovimientos();
-            notificar(i < 0 ? 'Producto agregado correctamente.' : 'Producto actualizado correctamente.');
+            notificar(i < 0 ? 'Producto agregado.' : 'Producto actualizado.');
             if(i<0) formulario.reset(); $('stock-minimo').value=0;
         });
+
         window.editarProducto = i => { const p=inventario[i]; Object.keys({nombre:1,cantidad:1,precio:1,precioCompra:1,stockMinimo:1,categoria:1,estado:1,proveedor:1,vencimiento:1}).forEach(k=>$(k==='stockMinimo'?'stock-minimo':k==='precioCompra'?'precio-compra':k).value=p[k]??''); $('indice-edicion').value=i; $('boton-formulario').textContent='Guardar cambios'; $('cancelar-edicion').classList.remove('oculto'); window.scrollTo({top:0,behavior:'smooth'}); };
         function cancelarEdicion() { formulario.reset(); $('indice-edicion').value=-1; $('boton-formulario').textContent='Agregar producto'; $('cancelar-edicion').classList.add('oculto'); $('stock-minimo').value=0; }
         $('cancelar-edicion').onclick=cancelarEdicion;
-        window.eliminarProducto = i => {
-            if (confirm(`¿Eliminar "${inventario[i].nombre}"?`)) {
-                inventario.splice(i,1); guardar(); actualizarTabla(); actualizarMovimientos();
-                notificar('Producto eliminado correctamente.');
-            }
-        };
+
+        window.eliminarProducto = i => { if (confirm(`¿Eliminar "${inventario[i].nombre}"?`)) { inventario.splice(i,1); guardar(); actualizarTabla(); actualizarMovimientos(); notificar('Producto eliminado.'); } };
+
         let indiceVenta = -1;
-        function cerrarModalVenta() {
-            $('modal-venta').classList.add('oculto');
-            indiceVenta = -1;
-        }
+        function cerrarModalVenta() { $('modal-venta').classList.add('oculto'); indiceVenta = -1; }
+
         window.registrarVenta = i => {
             const p = inventario[i];
-            if (p.cantidad < 1) return notificar('No hay unidades disponibles para vender.', true);
+            if (p.cantidad < 1) return notificar('No hay unidades disponibles.', true);
             indiceVenta = i;
             $('detalle-venta').textContent = `${p.nombre} — disponibles: ${p.cantidad} unidad(es)`;
-            $('cantidad-venta').value = 1;
-            $('cantidad-venta').max = p.cantidad;
-            $('modal-venta').classList.remove('oculto');
-            $('cantidad-venta').focus();
-            $('cantidad-venta').select();
+            $('cantidad-venta').value = 1; $('cantidad-venta').max = p.cantidad;
+            $('modal-venta').classList.remove('oculto'); $('cantidad-venta').focus(); $('cantidad-venta').select();
         };
+
         $('cancelar-venta').onclick = cerrarModalVenta;
         $('modal-venta').onclick = e => { if (e.target.id === 'modal-venta') cerrarModalVenta(); };
+
+        // Registro de venta calculando la ganancia para la Función 1
         $('confirmar-venta').onclick = () => {
             const p = inventario[indiceVenta], cantidad = Number($('cantidad-venta').value);
-            if (!p || !Number.isInteger(cantidad) || cantidad <= 0 || cantidad > p.cantidad) {
-                return notificar(`Cantidad no válida. Debe ser un número entero entre 1 y ${p?.cantidad || 0}.`, true);
-            }
+            if (!p || !Number.isInteger(cantidad) || cantidad <= 0 || cantidad > p.cantidad) return notificar(`Cantidad inválida.`, true);
+            
             p.cantidad -= cantidad;
-            ventas.push({nombre:p.nombre, cantidad, total:p.precio * cantidad, fecha:new Date().toLocaleString('es-ES')});
+            const gananciaVenta = (p.precio - p.precioCompra) * cantidad;
+            const nuevaVenta = {nombre:p.nombre, cantidad, total:p.precio * cantidad, ganancia:gananciaVenta, fecha:new Date().toLocaleString('es-ES')};
+            ventas.push(nuevaVenta);
             registrarMovimiento(p, 'Venta', cantidad);
             if (p.cantidad === 0) p.estado = 'Agotado';
+            
             guardar(); actualizarTabla(); actualizarMovimientos(); cerrarModalVenta();
-            notificar(`Venta registrada: ${cantidad} unidad(es) de ${p.nombre}.`);
+            notificar(`Venta registrada: ${cantidad} un. de ${p.nombre}.`);
         };
+
         window.hacerMovimiento = i => { const p=inventario[i], tipo=prompt('Escribe Entrada o Salida:', 'Salida'); if(!tipo || !['entrada','salida'].includes(tipo.toLowerCase())) return; const cantidad=Number(prompt('Cantidad del movimiento:', '1')); if(!Number.isFinite(cantidad)||cantidad<=0 || (tipo.toLowerCase()==='salida'&&cantidad>p.cantidad)) return alert('Cantidad no válida.'); p.cantidad += tipo.toLowerCase()==='entrada'?cantidad:-cantidad; registrarMovimiento(p,tipo[0].toUpperCase()+tipo.slice(1).toLowerCase(),cantidad); if (p.cantidad === 0) p.estado = 'Agotado'; else if (tipo.toLowerCase() === 'entrada' && p.estado === 'Agotado') p.estado = 'Disponible'; guardar(); actualizarTabla(); actualizarMovimientos(); };
+
         $('alternar-tema').onclick=()=>{ document.body.classList.toggle('oscuro'); const oscuro=document.body.classList.contains('oscuro'); localStorage.setItem('tema', oscuro?'oscuro':'claro'); $('alternar-tema').textContent=oscuro?'☀️ Modo claro':'🌙 Modo oscuro'; };
         if(localStorage.getItem('tema')==='oscuro') $('alternar-tema').click();
+
         document.querySelectorAll('th[data-orden]').forEach(th=>th.onclick=()=>{ const campo=th.dataset.orden; orden={campo,asc:orden.campo===campo?!orden.asc:true}; actualizarTabla(); });
         ['buscador','filtro-categoria','filtro-estado','filtro-stock'].forEach(id=>$(id).addEventListener('input',actualizarTabla));
         $('limpiar-filtros').onclick=()=>{ $('buscador').value=''; $('filtro-categoria').value=''; $('filtro-estado').value=''; $('filtro-stock').value=''; actualizarTabla(); };
+
         actualizarTabla(); actualizarMovimientos();
         window.addEventListener('resize', actualizarGraficos);
     </script>
