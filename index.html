@@ -91,7 +91,7 @@
     <header>
         <h1 data-i18n="tituloApp">Gestor de Inventario Pro</h1>
         <div style="display:flex; gap:10px;">
-            <button class="btn-secundario" id="btn-compras-pdf" type="button" data-i18n="btnOrdenCompra">🛒 Orden de compra</button>
+            <button class="btn-secundario btn-pdf" id="btn-compras-pdf" type="button" data-i18n="btnOrdenCompra">🛒 Orden de compra</button>
             <button class="btn-pdf" id="btn-reporte-pdf" type="button" data-i18n="btnReportePdf">📄 Reporte PDF</button>
         </div>
     </header>
@@ -268,16 +268,15 @@
     </div>
 
     <script>
-        // NAVEGACIÓN ENTRE PESTAÑAS
-        function cambiarPestana(idPestana, boton) {
-            document.querySelectorAll('.seccion-contenido').forEach(sec => sec.classList.remove('activa'));
-            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('activa'));
-            document.getElementById(idPestana).classList.add('activa');
-            boton.classList.add('activa');
-            if(idPestana === 'pestana-dashboard') actualizarGraficos();
-        }
+        // ESTADO GLOBAL
+        let productos = JSON.parse(localStorage.getItem('inventario_productos')) || [];
+        let ventas = JSON.parse(localStorage.getItem('inventario_ventas')) || [];
+        let movimientos = JSON.parse(localStorage.getItem('inventario_movimientos')) || [];
+        let config = JSON.parse(localStorage.getItem('inventario_config')) || { moneda: 'USD', idioma: 'es', oscuro: false };
+        let productoVentaIndice = null;
+        let chartCat = null;
+        let chartEst = null;
 
-        // MONEDAS
         const MONEDAS = [
             { code: 'USD', symbol: '$', name: 'USD - Dólar Estadounidense' },
             { code: 'EUR', symbol: '€', name: 'EUR - Euro' },
@@ -288,7 +287,6 @@
             { code: 'PEN', symbol: 'S/', name: 'PEN - Sol Peruano' }
         ];
 
-        // TRADUCCIONES COMPLETAS (ES, EN, FR)
         const TRADUCCIONES = {
             es: {
                 menuDashboard: "📊 Panel General", menuInventario: "📦 Inventario", menuVentas: "🛒 Historial Ventas", menuMovimientos: "📋 Movimientos", menuConfig: "⚙️ Configuración",
@@ -345,6 +343,450 @@
                 msgNoFaltantes: "Tout est parfait! Pas de stock bas.", msgOrdenDescargada: "Bon de commande téléchargé.", msgReporteDescargado: "Rapport PDF généré."
             }
         };
+
+        function cambiarPestana(idPestana, boton) {
+            document.querySelectorAll('.seccion-contenido').forEach(sec => sec.classList.remove('activa'));
+            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('activa'));
+            document.getElementById(idPestana).classList.add('activa');
+            boton.classList.add('activa');
+            if(idPestana === 'pestana-dashboard') actualizarGraficos();
+        }
+
+        function formatoMoneda(valor) {
+            const mon = MONEDAS.find(m => m.code === config.moneda) || MONEDAS[0];
+            return `${mon.symbol}${Number(valor).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
+        function notificar(msg, esError = false) {
+            const el = document.getElementById('notificacion');
+            el.textContent = msg;
+            el.className = 'visible' + (esError ? ' error' : '');
+            setTimeout(() => el.className = '', 3000);
+        }
+
+        function guardarDatos() {
+            localStorage.setItem('inventario_productos', JSON.stringify(productos));
+            localStorage.setItem('inventario_ventas', JSON.stringify(ventas));
+            localStorage.setItem('inventario_movimientos', JSON.stringify(movimientos));
+            localStorage.setItem('inventario_config', JSON.stringify(config));
+        }
+
+        function registrarMovimiento(detalle) {
+            const ahora = new Date().toLocaleString();
+            movimientos.unshift({ fecha: ahora, detalle });
+            guardarDatos();
+            renderizarMovimientos();
+        }
+
+        function renderizarProductos() {
+            const tbody = document.getElementById('lista-productos');
+            tbody.innerHTML = '';
+
+            const busqueda = document.getElementById('buscador').value.toLowerCase();
+            const cat = document.getElementById('filtro-categoria').value;
+            const est = document.getElementById('filtro-estado').value;
+            const stock = document.getElementById('filtro-stock').value;
+
+            const hoy = new Date();
+            hoy.setHours(0, 0, 0, 0);
+
+            const filtrados = productos.filter(p => {
+                const coincideTexto = p.nombre.toLowerCase().includes(busqueda) || p.proveedor.toLowerCase().includes(busqueda);
+                const coincideCat = !cat || p.categoria === cat;
+                const coincideEst = !est || p.estado === est;
+
+                let coincideStock = true;
+                if (stock === 'bajo') coincideStock = p.cantidad <= p.stockMinimo;
+                else if (stock === 'agotado') coincideStock = p.cantidad === 0;
+                else if (stock === 'vencido' && p.vencimiento) {
+                    coincideStock = new Date(p.vencimiento) < hoy;
+                } else if (stock === 'proximo' && p.vencimiento) {
+                    const fVenc = new Date(p.vencimiento);
+                    const diffDias = (fVenc - hoy) / (1000 * 60 * 60 * 24);
+                    coincideStock = diffDias >= 0 && diffDias <= 30;
+                }
+
+                return coincideTexto && coincideCat && coincideEst && coincideStock;
+            });
+
+            const t = TRADUCCIONES[config.idioma];
+
+            if (filtrados.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="11" class="vacio">${t.noCoincidencias}</td></tr>`;
+                actualizarResumen();
+                return;
+            }
+
+            filtrados.forEach((p) => {
+                const idx = productos.indexOf(p);
+                const tr = document.createElement('tr');
+                const totalVenta = p.cantidad * p.precio;
+                const gananciaEst = p.cantidad * (p.precio - p.precioCompra);
+
+                let estClase = 'estado-disponible';
+                if (p.estado === 'Agotado' || p.cantidad === 0) estClase = 'estado-agotado';
+                else if (p.estado === 'Pendiente') estClase = 'estado-pendiente';
+
+                let alertaStock = p.cantidad <= p.stockMinimo ? `<span class="alerta">⚠️</span>` : '';
+                
+                let textoVencimiento = p.vencimiento || '-';
+                if (p.vencimiento && new Date(p.vencimiento) < hoy) {
+                    textoVencimiento = `<span class="vencido">${p.vencimiento} (Vencido)</span>`;
+                }
+
+                tr.innerHTML = `
+                    <td><strong>${p.nombre}</strong> ${alertaStock}</td>
+                    <td>${p.cantidad}</td>
+                    <td>${formatoMoneda(p.precio)}</td>
+                    <td>${formatoMoneda(p.precioCompra)}</td>
+                    <td>${formatoMoneda(totalVenta)}</td>
+                    <td>${formatoMoneda(gananciaEst)}</td>
+                    <td>${p.categoria}</td>
+                    <td><span class="${estClase}">${p.estado}</span></td>
+                    <td>${p.proveedor}</td>
+                    <td>${textoVencimiento}</td>
+                    <td>
+                        <div class="acciones">
+                            <button class="btn-vender" onclick="abrirModalVenta(${idx})">${t.btnVender}</button>
+                            <button class="btn-editar" onclick="editarProducto(${idx})">${t.btnEditar}</button>
+                            <button class="btn-eliminar" onclick="eliminarProducto(${idx})">${t.btnEliminar}</button>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            actualizarResumen();
+        }
+
+        function actualizarResumen() {
+            let totalUnidades = 0;
+            let valorInventario = 0;
+            let gananciaEstimada = 0;
+            let alertas = 0;
+
+            productos.forEach(p => {
+                totalUnidades += p.cantidad;
+                valorInventario += p.cantidad * p.precio;
+                gananciaEstimada += p.cantidad * (p.precio - p.precioCompra);
+                if (p.cantidad <= p.stockMinimo) alertas++;
+            });
+
+            document.getElementById('total-productos').textContent = productos.length;
+            document.getElementById('total-unidades').textContent = totalUnidades;
+            document.getElementById('valor-inventario').textContent = formatoMoneda(valorInventario);
+            document.getElementById('total-ganancia-estimada').textContent = formatoMoneda(gananciaEstimada);
+            document.getElementById('total-alertas').textContent = alertas;
+
+            let totalVentasIngreso = 0;
+            let gananciaNeta = 0;
+            ventas.forEach(v => {
+                totalVentasIngreso += v.total;
+                gananciaNeta += v.ganancia;
+            });
+
+            document.getElementById('balance-total-ventas').textContent = formatoMoneda(totalVentasIngreso);
+            document.getElementById('balance-total-ganancia').textContent = formatoMoneda(gananciaNeta);
+        }
+
+        // AGREGAR O EDITAR PRODUCTO
+        document.getElementById('formulario-producto').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const idx = parseInt(document.getElementById('indice-edicion').value);
+
+            const nuevo = {
+                nombre: document.getElementById('nombre').value.trim(),
+                cantidad: parseInt(document.getElementById('cantidad').value) || 0,
+                precio: parseFloat(document.getElementById('precio').value) || 0,
+                precioCompra: parseFloat(document.getElementById('precio-compra').value) || 0,
+                stockMinimo: parseInt(document.getElementById('stock-minimo').value) || 0,
+                categoria: document.getElementById('categoria').value,
+                estado: document.getElementById('estado').value,
+                proveedor: document.getElementById('proveedor').value.trim(),
+                vencimiento: document.getElementById('vencimiento').value
+            };
+
+            if (idx === -1) {
+                productos.push(nuevo);
+                registrarMovimiento(`Producto agregado: ${nuevo.nombre} (${nuevo.cantidad} und.)`);
+                notificar("Producto guardado correctamente.");
+            } else {
+                productos[idx] = nuevo;
+                registrarMovimiento(`Producto actualizado: ${nuevo.nombre}`);
+                notificar("Producto actualizado correctamente.");
+                cancelarEdicion();
+            }
+
+            guardarDatos();
+            this.reset();
+            renderizarProductos();
+        });
+
+        function editarProducto(idx) {
+            const p = productos[idx];
+            document.getElementById('indice-edicion').value = idx;
+            document.getElementById('nombre').value = p.nombre;
+            document.getElementById('cantidad').value = p.cantidad;
+            document.getElementById('precio').value = p.precio;
+            document.getElementById('precio-compra').value = p.precioCompra;
+            document.getElementById('stock-minimo').value = p.stockMinimo;
+            document.getElementById('categoria').value = p.categoria;
+            document.getElementById('estado').value = p.estado;
+            document.getElementById('proveedor').value = p.proveedor;
+            document.getElementById('vencimiento').value = p.vencimiento || '';
+
+            const btnForm = document.getElementById('boton-formulario');
+            const btnCancel = document.getElementById('cancelar-edicion');
+            btnForm.textContent = TRADUCCIONES[config.idioma].btnGuardarCampos;
+            btnCancel.classList.remove('oculto');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        document.getElementById('cancelar-edicion').addEventListener('click', cancelarEdicion);
+
+        function cancelarEdicion() {
+            document.getElementById('indice-edicion').value = -1;
+            document.getElementById('formulario-producto').reset();
+            document.getElementById('boton-formulario').textContent = TRADUCCIONES[config.idioma].btnAgregar;
+            document.getElementById('cancelar-edicion').classList.add('oculto');
+        }
+
+        function eliminarProducto(idx) {
+            if (confirm("¿Estás seguro de eliminar este producto?")) {
+                const prod = productos[idx];
+                productos.splice(idx, 1);
+                registrarMovimiento(`Producto eliminado: ${prod.nombre}`);
+                guardarDatos();
+                renderizarProductos();
+                notificar("Producto eliminado.");
+            }
+        }
+
+        // VENTAS
+        function abrirModalVenta(idx) {
+            productoVentaIndice = idx;
+            const p = productos[idx];
+            if (p.cantidad <= 0) {
+                notificar("Este producto está agotado.", true);
+                return;
+            }
+            document.getElementById('detalle-venta').textContent = `${p.nombre} - Stock disponible: ${p.cantidad}`;
+            document.getElementById('cantidad-venta').max = p.cantidad;
+            document.getElementById('cantidad-venta').value = 1;
+            document.getElementById('modal-venta').classList.remove('oculto');
+        }
+
+        document.getElementById('cancelar-venta').addEventListener('click', () => {
+            document.getElementById('modal-venta').classList.add('oculto');
+        });
+
+        document.getElementById('confirmar-venta').addEventListener('click', () => {
+            const cantVendida = parseInt(document.getElementById('cantidad-venta').value) || 0;
+            if (productoVentaIndice === null || cantVendida <= 0) return;
+
+            const p = productos[productoVentaIndice];
+            if (cantVendida > p.cantidad) {
+                notificar("La cantidad excede el stock disponible.", true);
+                return;
+            }
+
+            p.cantidad -= cantVendida;
+            if (p.cantidad === 0) p.estado = 'Agotado';
+
+            const totalVenta = cantVendida * p.precio;
+            const ganancia = cantVendida * (p.precio - p.precioCompra);
+
+            ventas.unshift({
+                fecha: new Date().toLocaleString(),
+                producto: p.nombre,
+                cantidad: cantVendida,
+                total: totalVenta,
+                ganancia: ganancia
+            });
+
+            registrarMovimiento(`Venta registrada: ${cantVendida}x ${p.nombre} - Total: ${formatoMoneda(totalVenta)}`);
+            guardarDatos();
+            renderizarProductos();
+            renderizarVentas();
+            document.getElementById('modal-venta').classList.add('oculto');
+            notificar("Venta realizada exitosamente.");
+        });
+
+        function renderizarVentas() {
+            const ul = document.getElementById('lista-ventas');
+            ul.innerHTML = '';
+            const t = TRADUCCIONES[config.idioma];
+            if (ventas.length === 0) {
+                ul.innerHTML = `<li class="vacio">${t.sinVentas}</li>`;
+                return;
+            }
+            ventas.forEach(v => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${v.fecha}</strong> - ${v.cantidad}x ${v.producto} | Ingreso: <strong>${formatoMoneda(v.total)}</strong> | Ganancia: <strong style="color:var(--green);">${formatoMoneda(v.ganancia)}</strong>`;
+                ul.appendChild(li);
+            });
+        }
+
+        function renderizarMovimientos() {
+            const ul = document.getElementById('lista-movimientos');
+            ul.innerHTML = '';
+            const t = TRADUCCIONES[config.idioma];
+            if (movimientos.length === 0) {
+                ul.innerHTML = `<li class="vacio">${t.sinMov}</li>`;
+                return;
+            }
+            movimientos.forEach(m => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${m.fecha}</strong>: ${m.detalle}`;
+                ul.appendChild(li);
+            });
+        }
+
+        // GRÁFICOS
+        function actualizarGraficos() {
+            const catCounts = {};
+            const estCounts = { Disponible: 0, Agotado: 0, Pendiente: 0 };
+
+            productos.forEach(p => {
+                catCounts[p.categoria] = (catCounts[p.categoria] || 0) + 1;
+                if (estCounts[p.estado] !== undefined) estCounts[p.estado]++;
+            });
+
+            const ctxCat = document.getElementById('grafico-categoria').getContext('2d');
+            if (chartCat) chartCat.destroy();
+            chartCat = new Chart(ctxCat, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(catCounts),
+                    datasets: [{ data: Object.values(catCounts), backgroundColor: ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f'] }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+
+            const ctxEst = document.getElementById('grafico-estado').getContext('2d');
+            if (chartEst) chartEst.destroy();
+            chartEst = new Chart(ctxEst, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(estCounts),
+                    datasets: [{ data: Object.values(estCounts), backgroundColor: ['#2ecc71', '#e74c3c', '#f39c12'] }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
+
+        // IDIOMA Y TEMA
+        function aplicarTraducciones() {
+            const lang = config.idioma;
+            const t = TRADUCCIONES[lang] || TRADUCCIONES.es;
+
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (t[key]) el.textContent = t[key];
+            });
+
+            document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+                const key = el.getAttribute('data-i18n-ph');
+                if (t[key]) el.placeholder = t[key];
+            });
+
+            document.getElementById('alternar-tema').textContent = config.oscuro ? t.btnModoClaro : t.btnModoOscuro;
+        }
+
+        document.getElementById('selector-idioma').addEventListener('change', (e) => {
+            config.idioma = e.target.value;
+            guardarDatos();
+            aplicarTraducciones();
+            renderizarProductos();
+            renderizarVentas();
+            renderizarMovimientos();
+        });
+
+        document.getElementById('selector-moneda').addEventListener('change', (e) => {
+            config.moneda = e.target.value;
+            guardarDatos();
+            renderizarProductos();
+        });
+
+        document.getElementById('alternar-tema').addEventListener('click', () => {
+            config.oscuro = !config.oscuro;
+            document.body.classList.toggle('oscuro', config.oscuro);
+            guardarDatos();
+            aplicarTraducciones();
+        });
+
+        // FILTROS
+        ['buscador', 'filtro-categoria', 'filtro-estado', 'filtro-stock'].forEach(id => {
+            document.getElementById(id).addEventListener('input', renderizarProductos);
+        });
+
+        document.getElementById('limpiar-filtros').addEventListener('click', () => {
+            document.getElementById('buscador').value = '';
+            document.getElementById('filtro-categoria').value = '';
+            document.getElementById('filtro-estado').value = '';
+            document.getElementById('filtro-stock').value = '';
+            renderizarProductos();
+        });
+
+        // EXPORTAR E IMPORTAR
+        document.getElementById('btn-exportar').addEventListener('click', () => {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ productos, ventas, movimientos, config }));
+            const anchor = document.createElement('a');
+            anchor.setAttribute("href", dataStr);
+            anchor.setAttribute("download", `inventario_backup_${new Date().toISOString().slice(0,10)}.json`);
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+        });
+
+        document.getElementById('btn-importar').addEventListener('click', () => {
+            document.getElementById('archivo-importar').click();
+        });
+
+        document.getElementById('archivo-importar').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                try {
+                    const data = JSON.parse(evt.target.result);
+                    if (data.productos) productos = data.productos;
+                    if (data.ventas) ventas = data.ventas;
+                    if (data.movimientos) movimientos = data.movimientos;
+                    if (data.config) config = data.config;
+                    guardarDatos();
+                    init();
+                    notificar("Datos importados con éxito.");
+                } catch(err) {
+                    notificar("Error al leer el archivo de respaldo.", true);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // INICIALIZACIÓN
+        function init() {
+            const selMoneda = document.getElementById('selector-moneda');
+            selMoneda.innerHTML = '';
+            MONEDAS.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.code;
+                opt.textContent = m.name;
+                if (m.code === config.moneda) opt.selected = true;
+                selMoneda.appendChild(opt);
+            });
+
+            document.getElementById('selector-idioma').value = config.idioma;
+            document.body.classList.toggle('oscuro', config.oscuro);
+
+            aplicarTraducciones();
+            renderizarProductos();
+            renderizarVentas();
+            renderizarMovimientos();
+            actualizarGraficos();
+        }
+
+        init();
     </script>
 </body>
 </html>
